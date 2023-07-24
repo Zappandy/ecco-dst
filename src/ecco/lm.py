@@ -201,7 +201,10 @@ class LM(object):
         if self.model_type == 'enc-dec': # FIXME: only done because causal LMs like GPT-2 have the _prepare_decoder_input_ids_for_generation method but do not use it
             assert len(input_ids.size()) == 2 # will break otherwise
             if version.parse(transformers.__version__) >= version.parse('4.13'):
-                decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids.shape[0], None, None)
+                # FIX FOR T5 ADDED BY ANDRES. THE NONES ARE CREATING ISSUES. I SHOULD TEST THIS WITH ELSE AS WELL...
+                #decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids.shape[0], None, None)
+                decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids.shape[0], model_input_name='input_ids', model_kwargs=input_tokenized_info)
+                decoder_input_ids = decoder_input_ids[1]['input_ids']
             else:
                 decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids, None, None)
         else:
@@ -387,7 +390,9 @@ class LM(object):
         return OutputSeq(**{'tokenizer': self.tokenizer,
                             'token_ids': all_token_ids.unsqueeze(0),  # Add a batch dimension
                             'n_input_tokens': n_input_tokens,
-                            'output_text': self.tokenizer.decode(all_token_ids),
+                            # ANDRES FIX TO IGNORE SPECIAL TOKENS
+                            #'output_text': self.tokenizer.decode(all_token_ids),
+                            'output_text': self.tokenizer.decode(all_token_ids, skip_special_tokens=True),
                             'tokens': [tokens],  # Add a batch dimension
                             'encoder_hidden_states': encoder_hidden_states,
                             'decoder_hidden_states': decoder_hidden_states,
@@ -443,6 +448,7 @@ class LM(object):
             output = self.model(**input_tokens, return_dict=True, use_cache=False)
             lm_head = self.model.lm_head
         elif self.model_type == 'enc-dec':
+            # ANDRES TODO: I MAY NEED TO FIX THIS
             decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_tokens['input_ids'], None, None)
             output = self.model(**input_tokens, decoder_input_ids=decoder_input_ids, return_dict=True, use_cache=False)
             lm_head = self.model.lm_head
@@ -612,7 +618,9 @@ class LM(object):
         for idx, token_id in enumerate(input_ids):
             type = "input"
             raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-            clean_token = self.tokenizer.decode(token_id)
+            # ANDRES FIX
+            #clean_token = self.tokenizer.decode(token_id)
+            clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
             # Strip prefixes because bert decode still has ## for partials even after decode()
             clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
             tokens.append({
@@ -650,7 +658,8 @@ class LM(object):
     def display_token(self, viz_id, token_id, position):
 
         raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-        clean_token = self.tokenizer.decode(token_id)
+        #clean_token = self.tokenizer.decode(token_id)
+        clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
         # Strip prefixes because bert decode still has ## for partials even after decode()
         clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
 
@@ -682,7 +691,9 @@ class LM(object):
         sorted_predictions = s.argsort()[::-1]
         sm = F.softmax(scores, dim=-1).detach().numpy()
 
-        tokens = [self.tokenizer.decode([t]) for t in sorted_predictions[:topk]]
+        # ANDRES FIX
+        #tokens = [self.tokenizer.decode([t]) for t in sorted_predictions[:topk]]
+        tokens = [self.tokenizer.decode([t], skip_special_tokens=True) for t in sorted_predictions[:topk]]
         probs = sm[sorted_predictions[:topk]]
 
         prediction_data = []
