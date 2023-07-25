@@ -71,6 +71,11 @@ class LM(object):
                                 and self.model.device.type == 'cuda' \
             else 'cpu'
 
+        # ANDRES FIX: PASSING ALL TO CPU TO MAKE THIS EASIER
+        #self.model = model.to('cpu')
+        #self.device = 'cpu'
+        # ANDRES FIX: PASSING ALL TO CPU TO MAKE THIS EASIER. NOT REALLY
+
         self.tokenizer = tokenizer
         self.verbose = verbose
         self._path = os.path.dirname(ecco.__file__)
@@ -144,14 +149,21 @@ class LM(object):
             )
 
     def generate(self, input_str: str,
-                 max_length: Optional[int] = 8,
-                 temperature: Optional[float] = None,
-                 top_k: Optional[int] = None,
-                 top_p: Optional[float] = None,
+                 # ANDRES FIX: OVERWRITING MAX_LENGTH WITH MAX_new_tokens
+                 max_new_tokens: Optional[int] = None,
+                 min_new_tokens: Optional[int] = 0,
+                 max_length: Optional[int] = 20,
+                 # ADDING MIN_LENGTH
+                 min_length: Optional[int] = 0,
+                 # ADDING EARLY STOPPING
+                 early_stopping: Optional[bool] = False,
+                 temperature: Optional[float] = 1.0,
+                 top_k: Optional[int] = 50,
+                 top_p: Optional[float] = 1.0,
                  do_sample: Optional[bool] = False,
                  attribution: Optional[List[str]] = [],
                  generate: Optional[int] = None,
-                 beam_size: int = 1,
+                 num_beams: int = 1,
                  **generate_kwargs: Any):
         """
         Generate tokens in response to an input prompt.
@@ -168,16 +180,17 @@ class LM(object):
                 token. This may lead to repetitive text. If set to True, the model considers
                 consults top_k and/or top_p to generate more interesting output.
             attribution: List of attribution methods to be calculated. By default, it does not calculate anything.
-            beam_size: Beam size to consider while generating
+            num_beams: Beam size to consider while generating
             generate_kwargs: Other arguments to be passed directly to self.model.generate
         """
 
         assert self.model_type in ['enc-dec', 'causal'], f"generate method not supported for model type '{self.model_type}'"
 
-        top_k = top_k if top_k is not None else self.model.config.top_k
-        top_p = top_p if top_p is not None else self.model.config.top_p
-        temperature = temperature if temperature is not None else self.model.config.temperature
-        do_sample = do_sample if do_sample is not None else self.model.config.task_specific_params.get('text-generation', {}).get('do_sample', False)
+        #top_k = top_k if top_k is not None else self.model.config.top_k
+        #top_p = top_p if top_p is not None else self.model.config.top_p
+        #temperature = temperature if temperature is not None else self.model.config.temperature
+        #do_sample = do_sample if do_sample is not None else self.model.config.task_specific_params.get('text-generation', {}).get('do_sample', False)
+
 
         pad_token_id = self.model.config.pad_token_id
         eos_token_id = self.model.config.eos_token_id
@@ -189,22 +202,46 @@ class LM(object):
         n_input_tokens = len(input_ids[0])
         cur_len = n_input_tokens
 
-        if generate is not None:
-            max_length = n_input_tokens + generate
 
-        if cur_len >= max_length:
-            raise ValueError(
-                "max_length set to {} while input token has more tokens ({}). Consider increasing max_length" \
-                    .format(max_length, cur_len))
+        # ANDRES FIX:
+        generate_kwargs = {'top_k': top_k, 'top_p': top_p, 'temperature': temperature,
+                           'do_sample': do_sample, 'early_stopping': early_stopping,
+                           'num_beams': num_beams, 'return_dict_in_generate': True,
+                           'output_scores': True}
+        if max_new_tokens:
+            if generate is not None:
+                max_new_tokens = generate
+            if max_new_tokens >= 16:
+                min_new_tokens = min_new_tokens //  4
+            #ANDRES FIX
+
+            generate_kwargs = {**generate_kwargs, 'max_new_tokens': max_new_tokens, 'min_new_tokens': min_new_tokens}
+        else:
+            if generate is not None:
+                max_length = n_input_tokens + generate
+            if cur_len >= max_length:
+                raise ValueError(
+                    "max_length set to {} while input token has more tokens ({}). Consider increasing max_length" \
+                        .format(max_length, cur_len))
+            #ANDRES CONDITIONS
+            if max_length >= 128 :
+                min_length = max_length //  8
+
+            generate_kwargs = {**generate_kwargs,
+                              # FIXME: +1 in max_length to account for first start token in decoder, find a better way to do this
+                               'max_length': (generate or max_length - cur_len) + 1 if self.model_type == 'enc-dec' else max_length,
+                               'min_length': min_length}
+
 
         # Get decoder input ids
         if self.model_type == 'enc-dec': # FIXME: only done because causal LMs like GPT-2 have the _prepare_decoder_input_ids_for_generation method but do not use it
             assert len(input_ids.size()) == 2 # will break otherwise
+            # ANDRES' FIX
             if version.parse(transformers.__version__) >= version.parse('4.13'):
-                # FIX FOR T5 ADDED BY ANDRES. THE NONES ARE CREATING ISSUES. I SHOULD TEST THIS WITH ELSE AS WELL...
                 #decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids.shape[0], None, None)
                 decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids.shape[0], model_input_name='input_ids', model_kwargs=input_tokenized_info)
                 decoder_input_ids = decoder_input_ids[1]['input_ids']
+            # END OF MY FIX
             else:
                 decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_ids, None, None)
         else:
@@ -217,20 +254,11 @@ class LM(object):
 
         # Get model output
         self._remove_hooks() # deactivate hooks: we will run them for the last model forward only
-        output = self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            num_beams=beam_size,
-            # FIXME: +1 in max_length to account for first start token in decoder, find a better way to do this
-            max_length=(generate or max_length - cur_len) + 1 if self.model_type == 'enc-dec' else max_length,
-            do_sample=do_sample,
-            top_p=top_p,
-            top_k=top_k,
-            temperature=temperature,
-            return_dict_in_generate=True,
-            output_scores=True,
-            **generate_kwargs
-        )
+
+        # ANDRES FIX, ADDING MY OWN GENERATE BECAUSE THEIRS IS ANNOYING
+        output = self.model.generate(input_ids, attention_mask=attention_mask, **generate_kwargs)
+        #print(output.__class__.__name__)  # greedy search encoderdecoderoutput
+        # end ANDRES Fix
 
         # Get prediction logits for each chosen prediction id
         prediction_logits, prediction_ids = [], []
@@ -309,6 +337,7 @@ class LM(object):
             # More than one token can be generated at once (e.g., automatic split/pad tokens)
             while len(generated_token_ids[0]) + offset != n_printed_tokens:
 
+                # ANDRES FIX , I CHANGED DISPLAY_TOKEN
                 # Display token
                 if self.verbose:
                     self.display_token(
@@ -390,9 +419,10 @@ class LM(object):
         return OutputSeq(**{'tokenizer': self.tokenizer,
                             'token_ids': all_token_ids.unsqueeze(0),  # Add a batch dimension
                             'n_input_tokens': n_input_tokens,
-                            # ANDRES FIX TO IGNORE SPECIAL TOKENS
                             #'output_text': self.tokenizer.decode(all_token_ids),
+                            #ANDRES FIX
                             'output_text': self.tokenizer.decode(all_token_ids, skip_special_tokens=True),
+                            #ANDRES FIX
                             'tokens': [tokens],  # Add a batch dimension
                             'encoder_hidden_states': encoder_hidden_states,
                             'decoder_hidden_states': decoder_hidden_states,
@@ -448,7 +478,7 @@ class LM(object):
             output = self.model(**input_tokens, return_dict=True, use_cache=False)
             lm_head = self.model.lm_head
         elif self.model_type == 'enc-dec':
-            # ANDRES TODO: I MAY NEED TO FIX THIS
+            # I MAY NEED TO FIX THIS, ANDRES
             decoder_input_ids = self.model._prepare_decoder_input_ids_for_generation(input_tokens['input_ids'], None, None)
             output = self.model(**input_tokens, decoder_input_ids=decoder_input_ids, return_dict=True, use_cache=False)
             lm_head = self.model.lm_head
@@ -595,7 +625,7 @@ class LM(object):
         of the neurons indicated in self.neurons_to_inhibit
         """
 
-        layer_number = re.search("(?<=\.)\d+(?=\.)", name).group(0)
+        layer_number = int(name.split('.')[2])
         if layer_number in self.neurons_to_inhibit.keys():
             # print('layer_number', layer_number, input_tensor[0].shape)
 
@@ -618,8 +648,8 @@ class LM(object):
         for idx, token_id in enumerate(input_ids):
             type = "input"
             raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-            # ANDRES FIX
             #clean_token = self.tokenizer.decode(token_id)
+            # ANDRES FIX
             clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
             # Strip prefixes because bert decode still has ## for partials even after decode()
             clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
@@ -658,8 +688,10 @@ class LM(object):
     def display_token(self, viz_id, token_id, position):
 
         raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
+        # ANDRES FIX
         #clean_token = self.tokenizer.decode(token_id)
         clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
+        # END FIX
         # Strip prefixes because bert decode still has ## for partials even after decode()
         clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
 
