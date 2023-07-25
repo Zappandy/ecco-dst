@@ -164,7 +164,7 @@ class LM(object):
                  attribution: Optional[List[str]] = [],
                  generate: Optional[int] = None,
                  num_beams: int = 1,
-                 **generate_kwargs: Any):
+                 **other_generate_kwargs: Any):
         """
         Generate tokens in response to an input prompt.
         Works with Language models like GPT2, not masked language models like BERT.
@@ -207,7 +207,7 @@ class LM(object):
         generate_kwargs = {'top_k': top_k, 'top_p': top_p, 'temperature': temperature,
                            'do_sample': do_sample, 'early_stopping': early_stopping,
                            'num_beams': num_beams, 'return_dict_in_generate': True,
-                           'output_scores': True}
+                           'output_scores': True, **other_generate_kwargs}
         if max_new_tokens:
             if generate is not None:
                 max_new_tokens = generate
