@@ -6,6 +6,7 @@ import random
 import torch
 import transformers
 from transformers import BatchEncoding
+from transformers.generation import GenerationConfig
 
 import ecco
 import numpy as np
@@ -256,7 +257,8 @@ class LM(object):
         self._remove_hooks() # deactivate hooks: we will run them for the last model forward only
 
         # ANDRES FIX, ADDING MY OWN GENERATE BECAUSE THEIRS IS ANNOYING
-        output = self.model.generate(input_ids, attention_mask=attention_mask, **generate_kwargs)
+        gen_cfg = GenerationConfig.from_dict(generate_kwargs)
+        output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, generation_config=gen_cfg)
         #print(output.__class__.__name__)  # greedy search encoderdecoderoutput
         # end ANDRES Fix
 
