@@ -1,3 +1,4 @@
+My version of ECCO to visualize graph DST. Added some changes that I will try to push to the main branch.
 
 <img src="https://ar.pegg.io/img/ecco-logo-w800.png" width="400" style="background-color: white" />
 
