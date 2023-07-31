@@ -70,8 +70,8 @@ setup(
         "seaborn ~= 0.12",
         #"scikit-learn~=0.23",
         "scikit-learn~=1.3",
-        "PyYAML~=5.4",
-        #"PyYAML~=6.0",
+        #"PyYAML~=5.4",
+        "PyYAML~=6.0",
         #"captum ~= 0.4",
         "captum ~= 0.6"
     ],
