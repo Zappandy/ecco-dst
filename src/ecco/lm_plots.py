@@ -370,7 +370,8 @@ def plot_inner_token_rankings(input_tokens,
                                   gridspec_kw={"width_ratios": [n_columns, 0.5]}
                                   )
     plt.subplots_adjust(wspace=0.1)
-    fig.set_facecolor("w")
+    #fig.set_facecolor("w")
+    fig.set(facecolor='w')
     # ax = plt.gca()
 
     cmap_big = get_cmap('RdPu_r', 512)
@@ -417,6 +418,10 @@ def plot_inner_token_rankings(input_tokens,
                     labelbottom=True)  # labels along the bottom edge are off
 
     # Output token labels at the bottom
+    #print("TITO\n")
+    #for out in output_tokens:
+    #    print(out)
+    #raise SystemExit
     ax.set_xticklabels(output_tokens, rotation=-90)
     ax.set_xlabel('Output Token', fontsize=14)
 

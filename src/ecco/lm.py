@@ -208,7 +208,7 @@ class LM(object):
         generate_kwargs = {'top_k': top_k, 'top_p': top_p, 'temperature': temperature,
                            'do_sample': do_sample, 'early_stopping': early_stopping,
                            'num_beams': num_beams, 'return_dict_in_generate': True,
-                           'output_scores': True, 'output_hidden_states'=True,
+                           'output_scores': True, 'output_hidden_states': True,
                            **other_generate_kwargs}
         if max_new_tokens:
             if generate is not None:
@@ -260,7 +260,11 @@ class LM(object):
         # ANDRES FIX, ADDING MY OWN GENERATE BECAUSE THEIRS IS ANNOYING
         gen_cfg = GenerationConfig.from_dict(generate_kwargs)
         output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, generation_config=gen_cfg)
-        #print(output.__class__.__name__)  # greedy search encoderdecoderoutput
+        # THIS ONLY WORKS WITH MAX NEW TOKENS SO CAREFUL
+        actual_generated_tokens = output.sequences[0].cpu().numpy()  # nested tensor so indexing
+        mask = ~np.isin(actual_generated_tokens, self.tokenizer.all_special_ids)
+        actual_generated_tokens = actual_generated_tokens[mask]
+        print(f"ACTUAL NUMBER OF TOKENS GENERATED IF WE IGNORE SPECIAL IS {len(actual_generated_tokens)}")
         # end ANDRES Fix
 
         # Get prediction logits for each chosen prediction id
@@ -337,17 +341,18 @@ class LM(object):
             offset = n_input_tokens if decoder_input_ids is not None else 0
             generated_token_ids = decoder_input_ids if decoder_input_ids is not None else input_ids
 
-            # More than one token can be generated at once (e.g., automatic split/pad tokens)
-            while len(generated_token_ids[0]) + offset != n_printed_tokens:
-
+            if pred_index < len(actual_generated_tokens) and self.verbose:
                 # ANDRES FIX , I CHANGED DISPLAY_TOKEN
                 # Display token
-                if self.verbose:
-                    self.display_token(
-                        viz_id,
-                        generated_token_ids[0][n_printed_tokens - offset].cpu().numpy(),
-                        cur_len
-                    )
+                self.display_token(
+                    viz_id,
+                    #generated_token_ids[0][n_printed_tokens - offset].cpu().numpy(),
+                    actual_generated_tokens[pred_index],
+                    cur_len
+                )
+
+
+            while len(generated_token_ids[0]) + offset != n_printed_tokens:
 
                 n_printed_tokens += 1
 
@@ -357,6 +362,8 @@ class LM(object):
                         self.attributions[k].insert(-1, np.zeros_like(self.attributions[k][-1]))
 
             cur_len += 1
+        # More than one token can be generated at once (e.g., automatic split/pad tokens)
+
 
         # Get encoder/decoder hidden states
         embedding_states = None
@@ -406,8 +413,11 @@ class LM(object):
 
         if decoder_input_ids is not None:
             assert len(decoder_input_ids.size()) == 2
-            all_token_ids = torch.cat([input_ids, decoder_input_ids], dim=-1)[0]
+            #all_token_ids = torch.cat([input_ids, decoder_input_ids], dim=-1)[0]
+            # WITH MAX TOKENS
+            all_token_ids = torch.cat([input_ids, output.sequences], dim=-1)[0]
         else:
+            # THIS IS WEIRD
             all_token_ids = input_ids[0]
 
         tokens = self.tokenizer.convert_ids_to_tokens(all_token_ids)
@@ -417,15 +427,21 @@ class LM(object):
         #     tokens.append(token)
 
         attributions = self.attributions
+        # ANDRES FIX:
+        for attr in attribution:
+            self.attributions[attr] = self.attributions[attr][-max_new_tokens:]
+        # END FIX
         attn = getattr(output, "attentions", None)
+
+        # ANDRES ADDITION. This can be better, but new num of tokens is 9!
+        n_output_tokens = max_new_tokens
+
 
         return OutputSeq(**{'tokenizer': self.tokenizer,
                             'token_ids': all_token_ids.unsqueeze(0),  # Add a batch dimension
                             'n_input_tokens': n_input_tokens,
-                            #'output_text': self.tokenizer.decode(all_token_ids),
-                            #ANDRES FIX
-                            'output_text': self.tokenizer.decode(all_token_ids, skip_special_tokens=True),
-                            #ANDRES FIX
+                            'n_output_tokens': n_output_tokens,
+                            'output_text': self.tokenizer.decode(all_token_ids),
                             'tokens': [tokens],  # Add a batch dimension
                             'encoder_hidden_states': encoder_hidden_states,
                             'decoder_hidden_states': decoder_hidden_states,
@@ -651,9 +667,7 @@ class LM(object):
         for idx, token_id in enumerate(input_ids):
             type = "input"
             raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-            #clean_token = self.tokenizer.decode(token_id)
-            # ANDRES FIX
-            clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
+            clean_token = self.tokenizer.decode(token_id)
             # Strip prefixes because bert decode still has ## for partials even after decode()
             clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
             tokens.append({
@@ -691,10 +705,7 @@ class LM(object):
     def display_token(self, viz_id, token_id, position):
 
         raw_token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-        # ANDRES FIX
-        #clean_token = self.tokenizer.decode(token_id)
-        clean_token = self.tokenizer.decode(token_id, skip_special_tokens=True)
-        # END FIX
+        clean_token = self.tokenizer.decode(token_id)
         # Strip prefixes because bert decode still has ## for partials even after decode()
         clean_token = strip_tokenizer_prefix(self.model_config, clean_token)
 
@@ -726,9 +737,7 @@ class LM(object):
         sorted_predictions = s.argsort()[::-1]
         sm = F.softmax(scores, dim=-1).detach().numpy()
 
-        # ANDRES FIX
-        #tokens = [self.tokenizer.decode([t]) for t in sorted_predictions[:topk]]
-        tokens = [self.tokenizer.decode([t], skip_special_tokens=True) for t in sorted_predictions[:topk]]
+        tokens = [self.tokenizer.decode([t]) for t in sorted_predictions[:topk]]
         probs = sm[sorted_predictions[:topk]]
 
         prediction_data = []

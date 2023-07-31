@@ -44,6 +44,7 @@ class OutputSeq:
     def __init__(self,
                  token_ids=None,
                  n_input_tokens=None,
+                 n_output_tokens=None,
                  tokenizer=None,
                  output_text=None,
                  tokens=None,
@@ -84,6 +85,7 @@ class OutputSeq:
         self.token_ids = token_ids
         self.tokenizer = tokenizer
         self.n_input_tokens = n_input_tokens
+        self.n_output_tokens = n_output_tokens
         self.output_text = output_text
         self.tokens = tokens
         self.encoder_hidden_states = encoder_hidden_states
@@ -98,6 +100,9 @@ class OutputSeq:
         self.config = config
         self.model_type = model_type
         self._path = os.path.dirname(ecco.__file__)
+
+        self.total_n_tokens = len(self.tokens[0])
+
 
     def _get_encoder_hidden_states(self):
         return self.encoder_hidden_states if self.encoder_hidden_states is not None else self.decoder_hidden_states
@@ -120,12 +125,13 @@ class OutputSeq:
 
         tokens = []
         for idx, token in enumerate(self.tokens[0]):
-            type = "input" if idx < self.n_input_tokens else 'output'
+            type = "input" if idx < (self.total_n_tokens - self.n_output_tokens) else 'output'
 
             tokens.append({'token': token,
                            'token_id': int(self.token_ids[0][idx]),
                            'type': type
                            })
+
 
         data = {
             'tokens': tokens
@@ -160,10 +166,11 @@ class OutputSeq:
 
     def position(self, position, attr_method='grad_x_input'):
 
-        if (position < self.n_input_tokens) or (position > len(self.tokens) - 1):
+
+        if (position < self.n_input_tokens) or (position > self.total_n_tokens - 1):
             raise ValueError("'position' should indicate a position of a generated token. "
                              "Accepted values for this sequence are between {} and {}."
-                             .format(self.n_input_tokens, len(self.tokens) - 1))
+                             .format(self.n_input_tokens, self.total_n_tokens - 1))
 
         importance_id = position - self.n_input_tokens
         tokens = []
@@ -171,15 +178,15 @@ class OutputSeq:
         assert attr_method in self.attribution, \
             f"attr_method={attr_method} not found. Choose one of the following: {list(self.attribution.keys())}"
         attribution = self.attribution[attr_method]
-        for idx, token in enumerate(self.tokens):
-            type = "input" if idx < self.n_input_tokens else 'output'
+        for idx, token in enumerate(self.tokens[0]):
+            type = "input" if idx < (self.total_n_tokens - self.n_output_tokens) else 'output'
             if idx < len(attribution[importance_id]):
                 imp = attribution[importance_id][idx]
             else:
                 imp = -1
 
             tokens.append({'token': token,
-                           'token_id': int(self.token_ids[idx]),
+                           'token_id': int(self.token_ids[0][idx]),  # ignore batch dim
                            'type': type,
                            'value': str(imp)  # because json complains of floats
                            })
@@ -259,7 +266,8 @@ class OutputSeq:
             # Strip prefixes because bert decode still has ## for partials even after decode()
             clean_token = strip_tokenizer_prefix(self.config, clean_token)
 
-            type = "input" if idx < self.n_input_tokens else 'output'
+            #type = "input" if idx < self.n_input_tokens else 'output'
+            type = "input" if idx < (self.total_n_tokens - self.n_output_tokens) else 'output'
             if idx < len(attribution[importance_id]):
                 imp = attribution[importance_id][idx]
             else:
@@ -484,6 +492,9 @@ class OutputSeq:
         offset = self.n_input_tokens + 1 if self.model_type == 'enc-dec' else self.n_input_tokens
         output_tokens = [repr(strip_tokenizer_prefix(self.config, t)) for t in self.tokens[0][offset:]]
 
+        boundary = self.total_n_tokens - self.n_output_tokens
+        input_tokens = [repr(strip_tokenizer_prefix(self.config, t)) for t in self.tokens[0][:boundary]]
+        output_tokens = [repr(strip_tokenizer_prefix(self.config, t)) for t in self.tokens[0][boundary:]]
         lm_plots.plot_inner_token_rankings(input_tokens,
                                            output_tokens,
                                            rankings,
@@ -559,7 +570,7 @@ class OutputSeq:
         output_tokens = [repr(self.tokenizer.decode(t)) for t in watch]
 
         lm_plots.plot_inner_token_rankings_watch(input_tokens, output_tokens, rankings,
-                                                 position + self.n_input_tokens if self.model_type == 'enc-dec' else position)
+                                                 position + self.n_input_tokens if self.model_type == 'enc-dec' else position, **kwargs)
 
         if 'printJson' in kwargs and kwargs['printJson']:
             data = {'input_tokens': input_tokens,
