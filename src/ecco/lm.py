@@ -208,7 +208,8 @@ class LM(object):
         generate_kwargs = {'top_k': top_k, 'top_p': top_p, 'temperature': temperature,
                            'do_sample': do_sample, 'early_stopping': early_stopping,
                            'num_beams': num_beams, 'return_dict_in_generate': True,
-                           'output_scores': True, **other_generate_kwargs}
+                           'output_scores': True, 'output_hidden_states'=True,
+                           **other_generate_kwargs}
         if max_new_tokens:
             if generate is not None:
                 max_new_tokens = generate
